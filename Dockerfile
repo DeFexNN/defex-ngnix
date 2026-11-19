@@ -1,5 +1,5 @@
 # nginx 1.31.8 - vulnerable HTTP/2 build (shipped with --with-http_v2_module)
-FROM nginx:alpine
+FROM nginx:1.31.8-alpine
 
 RUN mkdir -p /opt/lab/html
 
@@ -10,4 +10,6 @@ COPY conf/big.bin /opt/lab/html/big.bin
 COPY conf/index.html /opt/lab/html/index.html
 
 EXPOSE 18443
+WORKDIR /opt/lab/data
+
 CMD ["nginx", "-g", "daemon off;"]

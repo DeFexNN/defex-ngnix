@@ -13,22 +13,33 @@ later, perfectly legal `WINDOW_UPDATE` gets rejected with `FLOW_CTRL_ERROR`.
 The PoC is a self-contained Docker lab on `127.0.0.1` — no external host, no
 build dependencies beyond Docker and Python 3 (h2 is vendored).
 
-**The script makes no `docker` calls.** You build and start the container, the
-script only speaks HTTP to it:
+**Use the official image, pinned to the vulnerable version.** The bug is in the
+binary, so nothing has to be built — only the lab config and assets are mounted
+read-only on top of stock `nginx:1.31.8-alpine`:
 
 ```sh
-docker build -t defex-ngnix:vuln .
-mkdir -p data
 docker run -d --name defex-ngnix -p 127.0.0.1:18443:18443 \
-    -v "$PWD/data:/opt/lab/data" defex-ngnix:vuln
+    -v "$PWD/conf/nginx.conf:/etc/nginx/nginx.conf:ro" \
+    -v "$PWD/conf/cert.pem:/opt/lab/cert.pem:ro" \
+    -v "$PWD/conf/key.pem:/opt/lab/key.pem:ro" \
+    -v "$PWD/conf/big.bin:/opt/lab/html/big.bin:ro" \
+    -v "$PWD/conf/index.html:/opt/lab/html/index.html:ro" \
+    -v "$PWD/data:/opt/lab/data" \
+    nginx:1.31.8-alpine
 
 ./defex_ngnix.sh          # prove it against the running container
 ./defex_ngnix.sh 8443     # same on another host port
 ```
 
-All 8 stages must pass. A failure leaves the container alone for inspection.
-The last stage is a control: the same load with and without resets, proving the
-leak is in the cleanup path and not in the load itself.
+Pin the tag. `nginx:alpine` floats and already moved to 1.31.9, which is
+patched — the run then fails at stage 5. The bundled `Dockerfile` does the same
+mounting as a one-shot build if you prefer `docker build` / `docker run`.
+
+**The script makes no `docker` calls.** You start the container, the script
+only speaks HTTP to it. All 8 stages must pass. A failure leaves the container
+alone for inspection. The last stage is a control: the same load with and
+without resets, proving the leak is in the cleanup path and not in the load
+itself.
 
 ## Requirements
 
