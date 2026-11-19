@@ -8,6 +8,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DATA="$HERE/data"
 IMAGE="defex-ngnix:vuln"
 NAME="defex-ngnix"
 PORT="${1:-18443}"
@@ -19,7 +20,7 @@ say()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 ok()   { printf '\033[1;32m[PASS]\033[0m %s\n' "$*"; }
 bad()  { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*"; FAILED=1; }
 info() { printf '\033[1;33m[ .. ]\033[0m %s\n' "$*"; }
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1; }
+cleanup() { docker rm -f "$NAME" >/dev/null 2>&1; }   # $DATA is never removed
 trap 'printf "\ninterrupted\n"; exit 130' INT
 
 say "stage 1/9 preflight"
@@ -50,8 +51,10 @@ if command -v ss >/dev/null && ss -ltn "sport = :$PORT" 2>/dev/null | grep -q LI
     fuser -k "$PORT/tcp" >/dev/null 2>&1 || true
     sleep 1
 fi
-if docker run -d --name "$NAME" -p "127.0.0.1:$PORT:18443" "$IMAGE" >/dev/null; then
+mkdir -p "$DATA"
+if docker run -d --name "$NAME" -p "127.0.0.1:$PORT:18443" -v "$DATA:/opt/lab/data" "$IMAGE" >/dev/null; then
     ok "container $NAME up, 127.0.0.1:$PORT -> 18443"
+    info "host data dir $DATA -> /opt/lab/data (survives restarts)"
 else
     bad "container start failed"; exit 1
 fi
@@ -139,9 +142,11 @@ fi
 
 say "container shell"
 info "url https://127.0.0.1:$PORT/ | log /var/log/nginx/lab.log"
+info "work dir /opt/lab/data is bind-mounted from $DATA - files survive restarts"
 info "type 'exit' to leave, the container keeps running"
 if [ -t 0 ]; then
-    docker exec -it "$NAME" sh
+    docker exec -it -w /opt/lab/data "$NAME" sh
+    docker exec "$NAME" chown -R "$(id -u):$(id -g)" /opt/lab/data 2>/dev/null || true
 else
     info "stdin is not a terminal, skipping the shell"
 fi

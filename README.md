@@ -134,6 +134,11 @@ watch the window sink under sustained churn.
 | `poc/leak_control.py` | stage 9, with/without-reset control |
 | `poc/window_growth.py` | optional, repeated churn cycles |
 | `poc/_vendor` | h2 / hpack / hyperframe, no pip needed |
+| `data/` | host dir bind-mounted to `/opt/lab/data`, created on first run |
+
+Anything you write in the shell goes to `/opt/lab/data`, which is bind-mounted
+from `data/` next to the script. The container itself is recreated on every
+run, so that directory is the only place work survives a restart.
 
 `error_log` points at a real file, not `/dev/stderr`: a symlinked log cannot
 be truncated with `: >` and `tail`/`grep` would block on the pipe forever.
