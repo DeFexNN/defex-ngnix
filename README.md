@@ -13,26 +13,34 @@ later, perfectly legal `WINDOW_UPDATE` gets rejected with `FLOW_CTRL_ERROR`.
 The PoC is a self-contained Docker lab on `127.0.0.1` — no external host, no
 build dependencies beyond Docker and Python 3 (h2 is vendored).
 
+**The script makes no `docker` calls.** You build and start the container, the
+script only speaks HTTP to it:
+
 ```sh
-./defex_ngnix.sh          # build, start, prove, then open a shell
+docker build -t defex-ngnix:vuln .
+mkdir -p data
+docker run -d --name defex-ngnix -p 127.0.0.1:18443:18443 \
+    -v "$PWD/data:/opt/lab/data" defex-ngnix:vuln
+
+./defex_ngnix.sh          # prove it against the running container
 ./defex_ngnix.sh 8443     # same on another host port
 ```
 
-All 9 stages must pass. A failure keeps the container for inspection. The last
-stage is a control: the same load with and without resets, proving the leak is
-in the cleanup path and not in the load itself.
+All 8 stages must pass. A failure leaves the container alone for inspection.
+The last stage is a control: the same load with and without resets, proving the
+leak is in the cleanup path and not in the load itself.
 
 ## Requirements
 
-- Docker (tested on 29.9.3)
+- Docker, to build and run the lab image
 - Python 3 with the vendored `poc/_vendor` tree (no `pip install`)
 - nothing else; TLS is a throwaway self-signed cert shipped for the lab
 
 ## Status
 
 Verified against `nginx:alpine` = **1.31.8** on 2026-11-19. Every run ends
-with 14 `[PASS]` and 0 `[FAIL]` from a clean image build. Newer or patched
-builds are expected to fail stage 7 and/or 8 — that is the signal.
+with 11 `[PASS]` and 0 `[FAIL]` against a freshly started container. Newer or
+patched builds are expected to fail stage 5 and/or 6 — that is the signal.
 
 > Only the lab above is tested. Other deployments, older branches and
 > reverse proxies in front of nginx are untested.
@@ -83,7 +91,7 @@ the peer keeps being refused the bytes it is entitled to.
 
 ## Proof
 
-**Stage 7 — overflow.** Client advertises `INITIAL_WINDOW_SIZE = 2^31-1`,
+**Stage 5 — overflow.** Client advertises `INITIAL_WINDOW_SIZE = 2^31-1`,
 opens 1000 streams behind a 1 KiB socket buffer so the HEADERS frames cannot
 leave, drains, then sends two full-size increments. The second one is only
 legal because of the drift:
@@ -93,7 +101,7 @@ legal because of the drift:
   increment 2147418112 not allowed for window 2081882111
 ```
 
-**Stage 8 — leak after cleanup.** 400 streams, all but the last RST afterwards.
+**Stage 6 — leak after cleanup.** 400 streams, all but the last RST afterwards.
 The bytes of the blocked DATA frames are not returned, so the window stays
 short of MAX and the final increment is rejected:
 
@@ -106,7 +114,7 @@ short of MAX and the final increment is rejected:
 payload is still missing from the window after 399 streams were cleaned up.
 The server stays healthy and still negotiates HTTP/2 afterwards.
 
-**Stage 9 — the control.** The same 400-stream load twice, once with the
+**Stage 7 — the control.** The same 400-stream load twice, once with the
 resets and once without. Both runs leak, but the reset run ends higher:
 cleanup does hand something back, it just skips the blocked frames.
 
@@ -116,7 +124,7 @@ cleanup does hand something back, it just skips the blocked frames.
 [PASS] cleanup gives back only unblocked frames - window stays short
 ```
 
-Stage 8 is therefore not just "some load happened": the window is far below
+Stage 6 is therefore not just "some load happened": the window is far below
 MAX in both arms, and the ordering matches the `!frame->blocked` filter in the
 source. `poc/window_growth.py` repeats the cycle several times if you want to
 watch the window sink under sustained churn.
@@ -125,23 +133,25 @@ watch the window sink under sustained churn.
 
 | path | role |
 |---|---|
-| `defex_ngnix.sh` | 9-stage driver, colours, cleanup trap |
+| `defex_ngnix.sh` | 8-stage HTTP-only driver, colours |
 | `Dockerfile` | `nginx:alpine` (1.31.8) + lab config and assets |
-| `conf/nginx.conf` | TLS + `http2 on`, 4 KiB output buffer, `info` log to `lab.log` |
+| `conf/nginx.conf` | TLS + `http2 on`, 4 KiB output buffer, `info` log to `lab.log`, log exposed at `/__lab.log` |
 | `conf/big.bin` | 4 MiB payload |
-| `poc/flow_control.py` | stage 7, window overflow |
-| `poc/blocked_frames.py` | stage 8, leak after stream cleanup |
-| `poc/leak_control.py` | stage 9, with/without-reset control |
+| `poc/flow_control.py` | stage 5, window overflow |
+| `poc/blocked_frames.py` | stage 6, leak after stream cleanup |
+| `poc/leak_control.py` | stage 7, with/without-reset control |
 | `poc/window_growth.py` | optional, repeated churn cycles |
 | `poc/_vendor` | h2 / hpack / hyperframe, no pip needed |
-| `data/` | host dir bind-mounted to `/opt/lab/data`, created on first run |
+| `data/` | host dir, bind-mount it to `/opt/lab/data` when you start the container |
 
-Anything you write in the shell goes to `/opt/lab/data`, which is bind-mounted
-from `data/` next to the script. The container itself is recreated on every
-run, so that directory is the only place work survives a restart.
+Anything you write in the shell goes to `/opt/lab/data`, which you bind-mount
+from `data/`. The container is yours to recreate, so that directory is the only
+place work survives a restart.
 
-`error_log` points at a real file, not `/dev/stderr`: a symlinked log cannot
-be truncated with `: >` and `tail`/`grep` would block on the pipe forever.
+`error_log` points at a real file, not `/dev/stderr`: a symlinked log cannot be
+truncated and `tail`/`grep` would block on the pipe forever. It is published at
+`/__lab.log` so the script can read it without `docker exec`; each stage
+remembers the byte offset and only looks at lines produced after that point.
 
 ## Notes
 
